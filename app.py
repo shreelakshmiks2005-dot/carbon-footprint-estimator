@@ -31,96 +31,100 @@ st.markdown("""
 
 /* ---------- GLOBAL ---------- */
 body, .stApp {
-    background: linear-gradient(145deg, #0D2F3A, #0B4748);
+    background: linear-gradient(135deg, #f0f9f7, #e8f5f2);
     font-family: 'Inter', sans-serif;
-    color: #E6F4F1 !important;
+    color: #0d4a40 !important;
 }
 
 /* ---------- HEADINGS ---------- */
 h1, h2, h3 {
     font-family: 'Poppins', sans-serif;
-    font-weight: 600;
-    color: #E8FFFE !important;
+    font-weight: 700;
+    color: #0d4a40 !important;
     text-align: center;
 }
 
 /* ---------- TEXT ---------- */
 p, label, span {
-    color: #CFE8E6 !important;
+    color: #1a5d52 !important;
 }
 
 /* ---------- LINK ---------- */
 a {
-    color: #A8E6DF !important;
+    color: #0d8970 !important;
     text-decoration: none !important;
-    font-weight: 500;
-}
-a:hover {
-    color: #74DACC !important;
-}
-
-/* ---------- SECTION TITLE ---------- */
-.section-title {
-    font-size: 28px;
     font-weight: 600;
-    margin-bottom: 10px;
 }
-
-/* ---------- CARDS ---------- */
-.card, .metric-card, .result-card, .recommendation-card {
-    background: rgba(255, 255, 255, 0.05);
-    padding: 22px;
-    border-radius: 18px;
-    border: 1px solid rgba(120, 200, 190, 0.18);
-    backdrop-filter: blur(10px);
-    box-shadow: 0px 6px 16px rgba(0,0,0,0.15);
-    transition: all 0.3s ease;
-}
-.card:hover, .recommendation-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0px 10px 24px rgba(0,0,0,0.25);
-}
-
-/* ---------- ICON COLORS ---------- */
-.icon-green  { color: #47E2A1 !important; }
-.icon-gold   { color: #F4D57C !important; }
-.icon-blue   { color: #42C6E8 !important; }
 
 /* ---------- BUTTONS ---------- */
 .stButton>button {
-    background: linear-gradient(135deg, #27A7B5, #34D1A1);
-    color: white !important;
+    background: linear-gradient(135deg, #16a085, #1abc9c);
+    color: #ffffff !important;
     border: none;
     border-radius: 12px;
-    padding: 10px 22px;
-    font-size: 16px;
-    font-weight: 600;
-    transition: 0.25s ease;
+    padding: 12px 24px;
+    font-weight: 700;
+    box-shadow: 0px 6px 15px rgba(22, 160, 133, 0.3);
+    transition: all 0.3s ease;
 }
+
 .stButton>button:hover {
-    transform: scale(1.02);
-    background: linear-gradient(135deg, #1F9BA9, #2BC790);
+    background: linear-gradient(135deg, #0d8970, #16a085);
+    transform: translateY(-2px);
 }
 
 /* ---------- INPUT FIELDS ---------- */
 input, select, textarea, .stTextInput>div>div>input,
 .stNumberInput input,
 .stSelectbox div[data-baseweb="select"] {
-    background: rgba(255,255,255,0.08) !important;
-    color: #E6F4F1 !important;
+    background: rgba(255, 255, 255, 0.98) !important;
+    color: #0d4a40 !important;
+    border: 2px solid #16a085 !important;
     border-radius: 10px !important;
-    border: 1px solid rgba(100,180,170,0.2) !important;
-}
-input:focus {
-    border-color: #40CFC4 !important;
 }
 
-/* ---------- FOOTER ---------- */
-.footer {
-    margin-top: 40px;
-    text-align: center;
-    color: #A8D9D4;
-    font-size: 14px;
+input::placeholder {
+    color: #7cb5ad !important;
+}
+
+input:focus {
+    border-color: #0d8970 !important;
+    background: rgba(255, 255, 255, 1) !important;
+}
+
+/* ---------- CARDS ---------- */
+.metric-card, .info-card, .result-card, .recommendation-card {
+    background: linear-gradient(135deg, rgba(232, 245, 242, 0.95), rgba(212, 237, 233, 0.95)) !important;
+    border: 2px solid #16a085 !important;
+    border-radius: 12px !important;
+    padding: 20px !important;
+    box-shadow: 0px 4px 12px rgba(22, 160, 133, 0.15) !important;
+}
+
+.metric-label {
+    color: #1a5d52 !important;
+    font-weight: 700;
+}
+
+.metric-value {
+    color: #0d8970 !important;
+    font-size: 2.5em !important;
+    font-weight: 900;
+}
+
+/* ---------- SECTION DIVIDER ----pandas==2.0.3
+numpy==1.24.3
+scikit-learn==1.3.0
+tensorflow==2.13.0
+streamlit==1.28.1
+matplotlib==3.7.2
+seaborn==0.12.2
+joblib==1.3.1
+plotly==5.16.1------ */
+.section-divider {
+    margin: 30px 0;
+    border-bottom: 2px solid #16a085;
+    opacity: 0.4;
 }
 
 </style>
@@ -143,9 +147,18 @@ if 'avg_footprint' not in st.session_state:
 # Load model and preprocessor (cached)
 @st.cache_resource
 def load_model_artifacts():
+    """Load preprocessor and ANN model"""
     try:
+        from tensorflow.keras.models import load_model
+        
+        # Load preprocessor
         preprocessor = DataPreprocessor.load('models/preprocessor.pkl')
-        model = CarbonFootprintModel.load('models/xgboost_model.pkl')
+        
+        # Load trained ANN model
+        # Use compile=False to avoid deserializing optimizer/metrics (prevents
+        # errors like: Could not deserialize 'keras.metrics.mse')
+        model = load_model('models/ann_model.h5', compile=False)
+        
         return preprocessor, model
     except Exception as e:
         st.error(f"Error loading models: {e}")
@@ -361,7 +374,10 @@ def show_form_page():
             try:
                 user_df = pd.DataFrame([user_data])
                 user_processed = preprocessor.transform(user_df)
-                prediction = model.predict(user_processed)[0]
+                # Ensure prediction is a native Python float (not a numpy array)
+                pred_arr = model.predict(user_processed, verbose=0)
+                # Squeeze and cast to float to avoid formatting errors later
+                prediction = float(np.squeeze(pred_arr))
                 
                 st.session_state.user_data = user_data
                 st.session_state.user_prediction = prediction
@@ -387,7 +403,8 @@ def show_results_page():
         <h1 style="color: #27ae60;">Your Carbon Footprint Analysis</h1>
     """, unsafe_allow_html=True)
     
-    prediction = st.session_state.user_prediction
+    # Ensure prediction is a float for formatting and arithmetic
+    prediction = float(st.session_state.user_prediction) if st.session_state.user_prediction is not None else 0.0
     user_data = st.session_state.user_data
     avg_footprint = 2000  # Average from Kaggle dataset (monthly in kg)
     

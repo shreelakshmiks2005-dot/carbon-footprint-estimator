@@ -1,201 +1,152 @@
 """
-Model Training Module - Builds and evaluates ML models for carbon footprint prediction
+Model Training - Neural Network for Carbon Footprint Estimation
 """
 
-import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
-from xgboost import XGBRegressor
+import pandas as pd
+from tensorflow.keras import Sequential, layers
+from tensorflow.keras.optimizers import Adam
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 import joblib
 from pathlib import Path
 import json
 
-
 class CarbonFootprintModel:
-    """Wrapper for carbon footprint prediction models"""
+    """Neural Network model for carbon footprint prediction"""
     
-    def __init__(self, model_type='linear'):
-        """
-        Initialize model
-        
-        Args:
-            model_type: 'linear', 'random_forest', or 'xgboost'
-        """
-        self.model_type = model_type
+    def __init__(self):
         self.model = None
-        self.metrics = {}
-        self._build_model()
+        self.history = None
     
-    def _build_model(self):
-        """Build the selected model"""
-        if self.model_type == 'linear':
-            self.model = LinearRegression()
-        elif self.model_type == 'random_forest':
-            self.model = RandomForestRegressor(
-                n_estimators=100,
-                max_depth=10,
-                min_samples_split=5,
-                min_samples_leaf=2,
-                random_state=42,
-                n_jobs=-1
-            )
-        elif self.model_type == 'xgboost':
-            self.model = XGBRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                random_state=42,
-                n_jobs=-1
-            )
-        else:
-            raise ValueError(f"Unknown model type: {self.model_type}")
+    def build_model(self, input_shape):
+        """Build ANN architecture"""
+        self.model = Sequential([
+            layers.Input(shape=(input_shape,)),
+            layers.Dense(128, activation='relu'),
+            layers.BatchNormalization(),
+            layers.Dropout(0.3),
+            
+            layers.Dense(64, activation='relu'),
+            layers.BatchNormalization(),
+            layers.Dropout(0.3),
+            
+            layers.Dense(32, activation='relu'),
+            layers.BatchNormalization(),
+            layers.Dropout(0.2),
+            
+            layers.Dense(16, activation='relu'),
+            layers.Dropout(0.2),
+            
+            layers.Dense(1, activation='linear')
+        ])
+        
+        self.model.compile(
+            optimizer=Adam(learning_rate=0.001),
+            loss='mse',
+            metrics=['mae']
+        )
+        
+        return self.model
     
-    def train(self, X_train, y_train):
-        """Train the model"""
-        self.model.fit(X_train, y_train)
-        print(f"{self.model_type} model trained successfully!")
+    def train(self, X_train, y_train, X_val, y_val, epochs=100, batch_size=32):
+        """Train the neural network"""
+        self.history = self.model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=epochs,
+            batch_size=batch_size,
+            verbose=1,
+            callbacks=[
+                __import__('tensorflow.keras.callbacks', fromlist=['EarlyStopping']).EarlyStopping(
+                    monitor='val_loss',
+                    patience=15,
+                    restore_best_weights=True
+                )
+            ]
+        )
+        
+        return self.history
     
     def predict(self, X):
         """Make predictions"""
-        return self.model.predict(X)
+        return self.model.predict(X, verbose=0).flatten()
     
     def evaluate(self, X_test, y_test):
-        """Evaluate model on test set"""
+        """Evaluate model performance"""
         y_pred = self.predict(X_test)
         
         mae = mean_absolute_error(y_test, y_pred)
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         r2 = r2_score(y_test, y_pred)
+        mape = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
         
-        self.metrics = {
+        metrics = {
             'MAE': mae,
             'RMSE': rmse,
             'R2': r2,
-            'MAPE': np.mean(np.abs((y_test - y_pred) / y_test)) * 100
+            'MAPE': mape
         }
         
-        return self.metrics, y_pred
+        return metrics, y_pred
     
-    def get_feature_importance(self, feature_names=None):
-        """Get feature importance (for tree-based models)"""
-        if self.model_type in ['random_forest', 'xgboost']:
-            importances = self.model.feature_importances_
-            
-            if feature_names is None:
-                feature_names = [f"Feature_{i}" for i in range(len(importances))]
-            
-            importance_df = pd.DataFrame({
-                'feature': feature_names,
-                'importance': importances
-            }).sort_values('importance', ascending=False)
-            
-            return importance_df
-        else:
-            if feature_names is None:
-                feature_names = [f"Feature_{i}" for i in range(len(self.model.coef_))]
-            
-            importance_df = pd.DataFrame({
-                'feature': feature_names,
-                'coefficient': np.abs(self.model.coef_)
-            }).sort_values('coefficient', ascending=False)
-            
-            return importance_df
-    
-    def save(self, path):
-        """Save model to file"""
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self.model, path)
-        print(f"Model saved to {path}")
+    def save(self, filepath):
+        """Save the model"""
+        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+        self.model.save(filepath)
     
     @staticmethod
-    def load(path):
-        """Load model from file"""
-        return joblib.load(path)
+    def load(filepath):
+        """Load saved model"""
+        from tensorflow.keras.models import load_model
+        # When loading a model for inference in a different environment or
+        # Keras/TensorFlow version, avoid loading the optimizer/metrics state
+        # which can cause deserialization errors for certain metric names.
+        return load_model(filepath, compile=False)
 
 
-class ModelTrainer:
-    """Trains and compares multiple models"""
+def train_carbon_model(X_train, y_train, X_test, y_test):
+    """Train and evaluate the ANN model"""
     
-    def __init__(self):
-        self.models = {}
-        self.results = {}
+    # Split training data for validation
+    X_train_split, X_val, y_train_split, y_val = train_test_split(
+        X_train, y_train, test_size=0.2, random_state=42
+    )
     
-    def train_all_models(self, X_train, y_train):
-        """Train all three models"""
-        model_types = ['linear', 'random_forest', 'xgboost']
-        
-        for model_type in model_types:
-            print(f"\nTraining {model_type} model...")
-            model = CarbonFootprintModel(model_type=model_type)
-            model.train(X_train, y_train)
-            self.models[model_type] = model
-        
-        print("\nAll models trained successfully!")
+    # Build and train model
+    model = CarbonFootprintModel()
+    model.build_model(input_shape=X_train_split.shape[1])
     
-    def evaluate_all_models(self, X_test, y_test):
-        """Evaluate all models"""
-        for model_type, model in self.models.items():
-            print(f"\nEvaluating {model_type} model...")
-            metrics, y_pred = model.evaluate(X_test, y_test)
-            self.results[model_type] = {
-                'metrics': metrics,
-                'predictions': y_pred
-            }
-            
-            print(f"  MAE: {metrics['MAE']:.4f}")
-            print(f"  RMSE: {metrics['RMSE']:.4f}")
-            print(f"  R²: {metrics['R2']:.4f}")
-            print(f"  MAPE: {metrics['MAPE']:.2f}%")
+    print("Training Neural Network Model...")
+    model.train(X_train_split, y_train_split, X_val, y_val, epochs=100, batch_size=32)
     
-    def get_best_model(self):
-        """Get the best performing model based on R²"""
-        best_model = max(
-            self.results.items(),
-            key=lambda x: x[1]['metrics']['R2']
-        )
-        return best_model[0], best_model[1]['metrics']['R2']
+    # Evaluate
+    metrics, predictions = model.evaluate(X_test, y_test)
     
-    def get_comparison_results(self):
-        """Get comparison results as DataFrame"""
-        comparison_data = []
-        
-        for model_type, result in self.results.items():
-            metrics = result['metrics']
-            comparison_data.append({
-                'Model': model_type.replace('_', ' ').title(),
-                'MAE': f"{metrics['MAE']:.4f}",
-                'RMSE': f"{metrics['RMSE']:.4f}",
-                'R²': f"{metrics['R2']:.4f}",
-                'MAPE': f"{metrics['MAPE']:.2f}%"
-            })
-        
-        return pd.DataFrame(comparison_data)
+    print("\n=== ANN Model Performance ===")
+    print(f"MAE: {metrics['MAE']:.2f}")
+    print(f"RMSE: {metrics['RMSE']:.2f}")
+    print(f"R2 Score: {metrics['R2']:.4f}")
+    print(f"MAPE: {metrics['MAPE']:.2f}%")
     
-    def save_all_models(self, model_dir='models'):
-        """Save all trained models"""
-        for model_type, model in self.models.items():
-            path = f"{model_dir}/{model_type}_model.pkl"
-            model.save(path)
+    # Save model
+    model_path = Path('models/ann_model.h5')
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    model.save(str(model_path))
     
-    def save_results(self, results_path='models/model_results.json'):
-        """Save evaluation results to JSON"""
-        Path(results_path).parent.mkdir(parents=True, exist_ok=True)
-        
-        results_to_save = {}
-        for model_type, result in self.results.items():
-            results_to_save[model_type] = {
-                'metrics': {k: float(v) if isinstance(v, np.floating) else v 
-                           for k, v in result['metrics'].items()}
-            }
-        
-        with open(results_path, 'w') as f:
-            json.dump(results_to_save, f, indent=2)
-        
-        print(f"Results saved to {results_path}")
+    # Save metrics
+    results = {
+        'Neural_Network': {
+            'metrics': metrics
+        }
+    }
+    
+    with open('models/model_results.json', 'w') as f:
+        json.dump(results, f, indent=4)
+    
+    print(f"\nModel saved to {model_path}")
+    
+    return model, metrics
 
 
 def train_and_evaluate_models(X_train, X_test, y_train, y_test, feature_names=None):
@@ -269,3 +220,7 @@ if __name__ == '__main__':
         X_train, X_test, y_train, y_test,
         feature_names=preprocessor.feature_names
     )
+
+    # Train and evaluate ANN model separately
+    print("Training and evaluating ANN model...")
+    ann_model, ann_metrics = train_carbon_model(X_train, y_train, X_test, y_test)
