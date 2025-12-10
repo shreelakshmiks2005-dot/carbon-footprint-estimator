@@ -167,7 +167,7 @@ def load_model_artifacts():
 # PAGE 1: HOME PAGE
 def show_home_page():
     st.markdown("""
-        <div class="hero-section">
+        <div class="hero-section" style="text-align: center;">
             <h1>🌍 Carbon Footprint Estimator</h1>
             <p>Understand Your Environmental Impact</p>
             <p style="font-size: 1em; opacity: 0.9;">Join millions worldwide in building a sustainable future</p>
@@ -639,7 +639,7 @@ def show_results_page():
 def show_comparative_page():
     st.markdown("""
         <h1 style="color: #27ae60;">Comparative Analysis</h1>
-        <p>Model performance comparison (Linear, Random Forest, XGBoost)</p>
+        <p>Model performance comparison (Neural Network, Random Forest, XGBoost)</p>
     """, unsafe_allow_html=True)
 
     # Model comparison: load saved metrics and display table + chart
@@ -649,6 +649,227 @@ def show_comparative_page():
         if results_path.exists():
             with open(results_path, 'r') as fh:
                 results = json.load(fh)
+            # Normalize keys to lowercase for presence checks
+            available_keys = {k.lower(): k for k in results.keys()}
+
+            # Collect debug info to help diagnose why metrics may be missing
+            debug_info = []
+            debug_info.append(f"Loaded results keys: {list(results.keys())}")
+
+            # Expect these baseline models to be shown (primary three: Linear, Random Forest, XGBoost)
+            expected_models = ['linear_regression', 'random_forest', 'xgboost', 'neural_network']
+
+            missing = [m for m in expected_models if m not in available_keys]
+
+            # If any expected model metrics are missing, attempt to compute them
+            if missing:
+                try:
+                    import joblib
+                    from tensorflow.keras.models import load_model as keras_load_model
+                    # Load dataset to compute metrics
+                    data_path_candidates = [Path('data/carbon_footprint_data_enriched.csv'), Path('data/carbon_footprint_data.csv')]
+                    data_df = None
+                    for p in data_path_candidates:
+                        if p.exists():
+                            data_df = pd.read_csv(p)
+                            break
+                    debug_info.append(f"Dataset found: {data_df is not None}")
+                    if data_df is not None:
+                        # Find target column
+                        target_col = None
+                        for col in data_df.columns:
+                            if 'carbon' in col.lower() or 'footprint' in col.lower():
+                                target_col = col
+                                break
+                        if target_col is None:
+                            target_col = data_df.columns[-1]
+
+                        X = data_df.drop(columns=[target_col])
+                        y = data_df[target_col]
+
+                        # Load preprocessor
+                        preprocessor_path = Path('models/preprocessor.pkl')
+                        preprocessor = None
+                        if preprocessor_path.exists():
+                            preprocessor = DataPreprocessor.load(str(preprocessor_path))
+                        debug_info.append(f"Preprocessor loaded: {preprocessor is not None}")
+
+                        # Use a test split/sample to compute metrics (use last 20%)
+                        from sklearn.model_selection import train_test_split
+                        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+                        # Prepare X_test for models
+                        if preprocessor is not None:
+                            X_test_proc = preprocessor.transform(X_test.copy())
+                        else:
+                            X_test_proc = X_test.values
+
+                        # Try loading model files and compute metrics for missing models
+                        def _ensure_feature_shape(X_proc, model):
+                            """Ensure X_proc has the same number of columns as model expects.
+                            Pads with zeros or truncates columns as needed. Returns numpy array."""
+                            import numpy as _np
+
+                            # Determine expected feature count
+                            expected = None
+                            if hasattr(model, 'n_features_in_'):
+                                try:
+                                    expected = int(model.n_features_in_)
+                                except Exception:
+                                    expected = None
+
+                            # If X_proc is a DataFrame, convert to numpy
+                            if hasattr(X_proc, 'values'):
+                                arr = X_proc.values
+                            else:
+                                arr = _np.asarray(X_proc)
+
+                            # If we don't know expected, return as-is
+                            if expected is None:
+                                return arr
+
+                            # Ensure 2D
+                            if arr.ndim == 1:
+                                arr = arr.reshape(1, -1)
+
+                            cur = arr.shape[1]
+                            if cur == expected:
+                                return arr
+                            elif cur < expected:
+                                # pad with zeros on the right
+                                pad = _np.zeros((arr.shape[0], expected - cur), dtype=arr.dtype)
+                                return _np.hstack([arr, pad])
+                            else:
+                                # truncate extra columns
+                                return arr[:, :expected]
+
+                        for m in missing:
+                            try:
+                                if m == 'linear_regression':
+                                    candidates = ['models/linear_model.pkl', 'models/linear_regression.pkl']
+                                    mdl = None
+                                    for c in candidates:
+                                        if Path(c).exists():
+                                            mdl = joblib.load(c)
+                                            break
+                                    if mdl is None:
+                                        debug_info.append(f"Linear model file not found among: {candidates}")
+                                        continue
+                                    X_for_pred = _ensure_feature_shape(X_test_proc, mdl)
+                                    y_pred = mdl.predict(X_for_pred)
+                                
+                                elif m == 'random_forest':
+                                    candidates = ['models/random_forest_model.pkl', 'models/random_forest.pkl']
+                                    mdl = None
+                                    for c in candidates:
+                                        if Path(c).exists():
+                                            mdl = joblib.load(c)
+                                            break
+                                    if mdl is None:
+                                        debug_info.append(f"Random Forest file not found among: {candidates}")
+                                        continue
+                                    X_for_pred = _ensure_feature_shape(X_test_proc, mdl)
+                                    y_pred = mdl.predict(X_for_pred)
+                                
+                                elif m == 'xgboost':
+                                    # Try common XGBoost / gradient-boosting filenames first (joblib pickles)
+                                    candidates = [
+                                        'models/xgboost_model.pkl', 'models/xgboost.pkl', 'models/xgboost_model.joblib',
+                                        'models/gradient_boosting_model.pkl', 'models/gradient_boosting.pkl'
+                                    ]
+                                    mdl = None
+                                    for c in candidates:
+                                        if Path(c).exists():
+                                            try:
+                                                mdl = joblib.load(c)
+                                                break
+                                            except Exception:
+                                                # Not a joblib pickle, continue to next candidate
+                                                mdl = None
+                                                continue
+
+                                    if mdl is not None:
+                                        X_for_pred = _ensure_feature_shape(X_test_proc, mdl)
+                                        y_pred = mdl.predict(X_for_pred)
+                                    else:
+                                        # Try loading an XGBoost Booster model file (json or binary)
+                                        xgb_found = None
+                                        for c in ['models/xgboost_model.json', 'models/xgboost_model.model', 'models/xgboost.model', 'models/xgboost.bin']:
+                                            p = Path(c)
+                                            if p.exists():
+                                                xgb_found = p
+                                                break
+                                        if xgb_found is None:
+                                            debug_info.append(f"XGBoost model file not found among candidates: {candidates + ['models/xgboost_model.json','models/xgboost_model.model']}")
+                                            continue
+                                        try:
+                                            import xgboost as xgb
+                                            booster = xgb.Booster()
+                                            booster.load_model(str(xgb_found))
+                                            X_for_pred = _ensure_feature_shape(X_test_proc, booster)
+                                            dmat = xgb.DMatrix(X_for_pred)
+                                            y_pred = booster.predict(dmat)
+                                        except Exception as ex:
+                                            debug_info.append(f"Failed to load XGBoost booster from {xgb_found}: {ex}")
+                                            continue
+
+                                elif m == 'gradient_boosting':
+                                    candidates = ['models/gradient_boosting_model.pkl', 'models/gradient_boosting.pkl', 'models/xgboost_model.pkl']
+                                    mdl = None
+                                    for c in candidates:
+                                        if Path(c).exists():
+                                            mdl = joblib.load(c)
+                                            break
+                                    if mdl is None:
+                                        debug_info.append(f"Gradient Boosting file not found among: {candidates}")
+                                        continue
+                                    X_for_pred = _ensure_feature_shape(X_test_proc, mdl)
+                                    y_pred = mdl.predict(X_for_pred)
+                                
+                                elif m == 'neural_network':
+                                    # ANN model is saved as H5
+                                    ann_path = Path('models/ann_model.h5')
+                                    if not ann_path.exists():
+                                        debug_info.append("ANN model file not found: models/ann_model.h5")
+                                        continue
+                                    ann = keras_load_model(str(ann_path), compile=False)
+                                    X_for_pred = _ensure_feature_shape(X_test_proc, ann)
+                                    y_pred = ann.predict(X_for_pred, verbose=0).flatten()
+
+                                else:
+                                    continue
+
+                                import numpy as np
+                                from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+                                mae = float(mean_absolute_error(y_test, y_pred))
+                                rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+                                r2 = float(r2_score(y_test, y_pred))
+                                try:
+                                    mape = float(np.mean(np.abs((y_test - y_pred) / y_test)) * 100)
+                                except Exception:
+                                    mape = None
+
+                                # Add to results under the original casing key
+                                results[m] = {'metrics': {'MAE': mae, 'RMSE': rmse, 'R2': r2, 'MAPE': mape}}
+                                debug_info.append(f"Computed metrics for {m}: R2={r2:.3f}, MAE={mae:.1f}")
+                            except Exception:
+                                import traceback
+                                tb = traceback.format_exc()
+                                debug_info.append(f"Failed to compute metrics for {m}: {tb}")
+                                continue
+
+                        # Persist updated results to file
+                        try:
+                            with open(results_path, 'w') as fh:
+                                json.dump(results, fh, indent=4)
+                            debug_info.append("Persisted updated model_results.json")
+                        except Exception as ex:
+                            debug_info.append(f"Failed to persist model_results.json: {ex}")
+                except Exception:
+                    import traceback
+                    debug_info.append(f"Fallback computation failed: {traceback.format_exc()}")
+                    # If fallback computation fails, continue with whatever results are present
+                    pass
 
             rows = []
             for name, val in results.items():
@@ -662,18 +883,63 @@ def show_comparative_page():
                 })
 
             metrics_df = pd.DataFrame(rows).set_index('Model')
+
+            # Normalize common naming (ensure XGBoost shows correctly)
+            metrics_df = metrics_df.rename(index=lambda s: s.replace('Xgboost', 'XGBoost'))
+
+            # Filter to only include Neural Network, Random Forest, and XGBoost
+            # (exclude Linear Regression)
+            keep_models = ['Neural Network', 'Random Forest', 'XGBoost']
+            idx_map = {idx.strip().lower(): idx for idx in metrics_df.index}
+            models_to_keep = []
+            for m in keep_models:
+                key = m.strip().lower()
+                if key in idx_map:
+                    models_to_keep.append(idx_map[key])
+            
+            if models_to_keep:
+                metrics_df = metrics_df.loc[models_to_keep]
+            
+            # Show the three models in the metrics table
+            st.subheader('Metrics Table (Three Best Models)')
             st.dataframe(metrics_df.style.format({
                 'MAE': '{:.1f}', 'RMSE': '{:.1f}', 'R2': '{:.3f}', 'MAPE (%)': '{:.2f}'
             }))
 
-            # Bar chart for R2 and MAE
-            chart_df = metrics_df.reset_index()
-            fig_metrics = px.bar(
-                chart_df.melt(id_vars='Model', value_vars=['R2', 'MAE']),
-                x='Model', y='value', color='variable', barmode='group',
-                title='Model Comparison (R2 and MAE)'
-            )
-            st.plotly_chart(fig_metrics, use_container_width=True)
+            # Use filtered metrics_df for chart
+            chart_df = metrics_df
+
+            # Create two side-by-side charts for clarity: MAE (raw) and R² (raw)
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.subheader('MAE (lower is better)')
+                if 'MAE' in chart_df.columns:
+                    fig_mae = px.bar(chart_df.reset_index(), x='Model', y='MAE', color='Model',
+                                     title='Mean Absolute Error (kg CO₂/month)',
+                                     color_discrete_sequence=px.colors.qualitative.Plotly)
+                    fig_mae.update_layout(showlegend=False)
+                    fig_mae.update_yaxes(title_text='MAE (kg)')
+                    st.plotly_chart(fig_mae, use_container_width=True)
+                else:
+                    st.info('MAE not available for selected models.')
+
+            with col2:
+                st.subheader('R² (higher is better)')
+                if 'R2' in chart_df.columns:
+                    fig_r2 = px.bar(chart_df.reset_index(), x='Model', y='R2', color='Model',
+                                    title='R² Score', color_discrete_sequence=px.colors.qualitative.Plotly)
+                    fig_r2.update_layout(showlegend=False)
+                    fig_r2.update_yaxes(title_text='R²')
+                    st.plotly_chart(fig_r2, use_container_width=True)
+                else:
+                    st.info('R² not available for selected models.')
+
+            # Show debug info to help understand which model metrics were available/computed
+            if debug_info:
+                with st.expander('Comparative debug info (click to expand)'):
+                    for line in debug_info:
+                        st.text(line)
         else:
             st.info('Model results file not found. Run retrain_models.py to generate model results.')
     except Exception as e:

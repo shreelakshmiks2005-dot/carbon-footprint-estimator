@@ -54,7 +54,15 @@ X_test_processed = preprocessor.transform(X_test)
 # Save preprocessor
 preprocessor.save('models/preprocessor.pkl')
 
-# Train ANN model
+# Train baseline models (Linear, Random Forest, XGBoost) and save results
+print("Training baseline models (Linear, RF, XGBoost if available)...")
+try:
+    trainer = train_and_evaluate_models(X_train_processed, X_test_processed, y_train, y_test, feature_names=preprocessor.feature_columns)
+    # trainer.save_all_models() and trainer.save_results() are called inside train_and_evaluate_models
+except Exception as ex:
+    print("Warning: error training baseline models:", ex)
+
+# Train ANN model separately (keeps previous behavior)
 print("Training ANN model...")
 model, metrics = train_carbon_model(X_train_processed, y_train, X_test_processed, y_test)
 

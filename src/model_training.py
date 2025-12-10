@@ -105,6 +105,142 @@ class CarbonFootprintModel:
         return load_model(filepath, compile=False)
 
 
+class ModelTrainer:
+    """Train and evaluate a set of baseline models for comparison"""
+
+    def __init__(self):
+        self.models = {}
+        self.results = {}
+
+    def train_all_models(self, X_train, y_train):
+        """Train Linear Regression, Random Forest, and XGBoost (if available)."""
+        from sklearn.linear_model import LinearRegression
+        from sklearn.ensemble import RandomForestRegressor
+        import joblib
+
+        # Linear Regression
+        lr = LinearRegression()
+        lr.fit(X_train, y_train)
+        self.models['linear_regression'] = lr
+
+        # Random Forest
+        rf = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+        rf.fit(X_train, y_train)
+        self.models['random_forest'] = rf
+
+        # Gradient Boosting (sklearn) as a lightweight alternative
+        try:
+            from sklearn.ensemble import GradientBoostingRegressor
+            gbr = GradientBoostingRegressor(n_estimators=100, learning_rate=0.1, max_depth=6, random_state=42)
+            gbr.fit(X_train, y_train)
+            self.models['gradient_boosting'] = gbr
+        except Exception:
+            # If sklearn's GradientBoosting is not available (rare), skip
+            pass
+
+        # XGBoost (optional) - train if xgboost is installed
+        try:
+            from xgboost import XGBRegressor
+            xgb = XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1, subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=-1)
+            xgb.fit(X_train, y_train)
+            self.models['xgboost'] = xgb
+        except Exception:
+            # XGBoost not available — skip
+            pass
+
+    def evaluate_all_models(self, X_test, y_test):
+        """Evaluate all trained models and store metrics in self.results."""
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+        import numpy as np
+
+        for name, model in self.models.items():
+            try:
+                y_pred = model.predict(X_test)
+            except Exception:
+                # Some models (like XGBoost) may return dmatrix outputs; coerce
+                y_pred = model.predict(X_test)
+
+            mae = float(mean_absolute_error(y_test, y_pred))
+            rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+            r2 = float(r2_score(y_test, y_pred))
+            # Avoid division by zero in MAPE
+            try:
+                mape = float((np.mean(np.abs((y_test - y_pred) / y_test))) * 100)
+            except Exception:
+                mape = None
+
+            self.results[name] = {
+                'metrics': {
+                    'MAE': mae,
+                    'RMSE': rmse,
+                    'R2': r2,
+                    'MAPE': mape
+                }
+            }
+
+    def get_comparison_results(self):
+        """Return a pandas DataFrame suitable for display in the app."""
+        import pandas as pd
+
+        rows = []
+        for name, val in self.results.items():
+            m = val.get('metrics', {})
+            rows.append({
+                'Model': name.replace('_', ' ').title(),
+                'MAE': m.get('MAE'),
+                'RMSE': m.get('RMSE'),
+                'R2': m.get('R2'),
+                'MAPE (%)': m.get('MAPE')
+            })
+
+        if rows:
+            return pd.DataFrame(rows)
+        else:
+            return pd.DataFrame(columns=['Model', 'MAE', 'RMSE', 'R2', 'MAPE (%)'])
+
+    def get_best_model(self):
+        """Return the name and R2 of the best model by R2 score."""
+        best_name = None
+        best_r2 = -float('inf')
+        for name, val in self.results.items():
+            r2 = val.get('metrics', {}).get('R2')
+            if r2 is not None and r2 > best_r2:
+                best_r2 = r2
+                best_name = name
+        return best_name, best_r2
+
+    def save_all_models(self):
+        """Save non-Keras models to `models/` using joblib."""
+        import joblib
+        Path('models').mkdir(parents=True, exist_ok=True)
+        for name, model in self.models.items():
+            try:
+                joblib.dump(model, f'models/{name}.pkl')
+            except Exception:
+                # If a model fails to serialize with joblib, skip
+                continue
+
+    def save_results(self, filepath='models/model_results.json'):
+        import json
+        Path('models').mkdir(parents=True, exist_ok=True)
+        with open(filepath, 'w') as fh:
+            json.dump(self.results, fh, indent=4)
+
+    def get_feature_importance(self, feature_names):
+        """Return feature importance DataFrame for Random Forest if available."""
+        import pandas as pd
+        rf = self.models.get('random_forest')
+        if rf is None:
+            raise ValueError('Random Forest model not trained')
+        try:
+            import numpy as np
+            imp = rf.feature_importances_
+            df = pd.DataFrame({'feature': feature_names, 'importance': imp})
+            return df.sort_values('importance', ascending=False)
+        except Exception as ex:
+            raise ex
+
+
 def train_carbon_model(X_train, y_train, X_test, y_test):
     """Train and evaluate the ANN model"""
     

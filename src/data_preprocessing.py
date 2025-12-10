@@ -72,6 +72,12 @@ class DataPreprocessor:
                 # For unseen values, set to first class index (0)
                 df.loc[~known_mask, col] = 0
 
+        # Ensure all columns are numeric before scaling. Any remaining non-numeric
+        # values (e.g., list-like strings) will become NaN and then be filled
+        # with zero. This is a safe fallback for computing comparisons when the
+        # saved preprocessor was fitted in a different environment.
+        df = df.apply(pd.to_numeric, errors='coerce').fillna(0)
+
         # Scale features (StandardScaler expects same column order)
         return self.scaler.transform(df)
     
